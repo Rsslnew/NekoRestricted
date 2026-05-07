@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  acx-neko-bot:
+    build: .
+    container_name: acx-neko-bot
+    restart: unless-stopped
+    env_file:
+      - config.env
+    volumes:
+      - ./downloads:/app/downloads
+    environment:
+      - TZ=Asia/Jakarta
