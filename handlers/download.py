@@ -22,7 +22,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from neko_art import *
 from utils.progress import ProgressTracker, RateLimitTracker
 from utils.helpers import format_speed, format_eta, extract_link_info as extract_link
-from config import FORWARD_CHAT_ID
+from config import FORWARD_CHAT_ID, MAX_CONCURRENT_DOWNLOADS
 
 logger = logging.getLogger(__name__)
 
