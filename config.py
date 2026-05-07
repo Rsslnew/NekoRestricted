@@ -28,6 +28,10 @@ DB_NAME = os.getenv("DB_NAME", "AcxNekoDB")
 
 # ==================== ADMIN CONFIGURATION ====================
 ADMINS = os.getenv("ADMINS", "")
+try:
+    ADMINS = [int(x.strip()) for x in ADMINS.split(",") if x.strip()]
+except (ValueError, AttributeError):
+    ADMINS = []
 
 # ==================== OPTIONAL CONFIGURATION ====================
 FORWARD_CHAT_ID = os.getenv("FORWARD_CHAT_ID", "")

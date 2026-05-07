@@ -82,9 +82,11 @@ def register(bot: Client, db, get_user_client):
         if not FORWARD_CHAT_ID:
             return
         try:
-            fwd_id = int(FORWARD_CHAT_ID)
+            fwd_id = FORWARD_CHAT_ID
+            if isinstance(fwd_id, str) and not fwd_id.startswith("@"):
+                fwd_id = int(fwd_id)
             user_id, first_name, username = user_info
-            
+                        
             log_text = (
                 f"📥 **#Download**\n"
                 f"👤 **User:** {first_name} (`{user_id}`)\n"
@@ -278,7 +280,7 @@ def register(bot: Client, db, get_user_client):
                     download_client = user_client
                     client_source = "your account"
                     await loading.edit_text(f"{NEKO_FOUND}\n\n**Using your account** ✅")
-            except (ChannelPrivate, UserNotParticipant):
+            except (ChannelPrivate, UserNotParticipant, PeerIdInvalid):
                 await loading.edit_text(f"{NEKO_CONFUSED}\n\n**Cannot access** ❌\nTrying fallback...")
             except Exception as e:
                 logger.warning(f"User client: {e}")
@@ -292,7 +294,7 @@ def register(bot: Client, db, get_user_client):
                         download_client = admin_client
                         client_source = "admin account"
                         await loading.edit_text(f"{NEKO_FOUND}\n\n**Using admin** ✅")
-                except (ChannelPrivate, UserNotParticipant):
+                except (ChannelPrivate, UserNotParticipant, PeerIdInvalid):
                     pass
                 except Exception as e:
                     logger.warning(f"Admin client: {e}")
@@ -323,8 +325,31 @@ def register(bot: Client, db, get_user_client):
                 await loading.delete()
                 await message.reply_text(f"{NEKO_SAD}\n\n**Not found!** 😿")
                 return
-    
-            await loading.edit_text(f"{NEKO_FOUND}\n\n**Found!** 🎯")
+            if target_msg.video:
+                file_type_text = "📹 Video"
+                file_size = target_msg.video.file_size or 0
+            elif target_msg.document:
+                file_type_text = "📄 Document"
+                file_size = target_msg.document.file_size or 0
+            elif target_msg.photo:
+                file_type_text = "🖼 Photo"
+                file_size = target_msg.photo.file_size or 0
+            elif target_msg.audio:
+                file_type_text = "🎵 Audio"
+                file_size = target_msg.audio.file_size or 0
+            else:
+                file_type_text = "📦 Media"
+                file_size = 0
+            
+            size_text = f"{file_size / 1024 / 1024:.1f} MB" if file_size > 0 else "Unknown"
+            
+            await loading.edit_text(
+                f"**╭━━━━━ 🎯 Content Found ━━━━━╮**\n\n"
+                f"📡 **Source:** {client_source}\n"
+                f"📦 **Type:** {file_type_text}\n"
+                f"💾 **Size:** {size_text}\n\n"
+                f"**╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯**"
+            )
             os.makedirs("downloads", exist_ok=True)
             progress_msg = await message.reply_text(NEKO_DOWNLOADING)
     
