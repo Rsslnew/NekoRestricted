@@ -292,3 +292,11 @@ class Database:
             {},
             {"$set": {"daily_count": 0, "last_reset": datetime.utcnow()}}
         )
+
+    async def get_all_user_data(self):
+        """Get all user data for daily count restore."""
+        cursor = self.users.find({}, {"user_id": 1, "daily_count": 1, "last_reset": 1})
+        users = []
+        async for user in cursor:
+            users.append(user)
+        return users

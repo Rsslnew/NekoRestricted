@@ -425,8 +425,8 @@ def register(bot: Client, db, get_user_client):
         finally:
             download_tasks.pop(user_id, None)
         
+#=================BatchFix===============
 
-    # ==================== BATCH DOWNLOAD ====================
     @bot.on_message(filters.command("bdl"))
     async def batch_download(client, message):
         user = message.from_user
@@ -439,6 +439,15 @@ def register(bot: Client, db, get_user_client):
     
         if await db.is_banned(user_id):
             return await message.reply_text(f"{NEKO_ANGRY}\n\n**Banned!**")
+    
+        if not await check_force_sub(bot, user_id, message):
+            return
+    
+        if not await check_spam(user_id, message):
+            return
+    
+        if not await check_daily_limit(user_id, db, message):
+            return
     
         await db.add_user(user_id, username, first_name)
     
@@ -463,20 +472,40 @@ def register(bot: Client, db, get_user_client):
         download_tasks[user_id] = task
         active_downloads[user_id] = True
     
-        status = await message.reply_text(f"{NEKO_WAVE}\n\n**Batch: {total} posts**")
+        status = await message.reply_text(
+            f"**╭━━━━━ 📦 Batch Download ━━━━━╮**\n\n"
+            f"📊 **Total:** {total} posts\n"
+            f"📂 **Channel:** `{start_chat}`\n\n"
+            f"**╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯**"
+        )
         success, failed = 0, 0
         os.makedirs("downloads", exist_ok=True)
     
         try:
             for i, mid in enumerate(range(start_id, end_id + 1)):
                 if not active_downloads.get(user_id, True):
-                    await status.edit_text(f"{NEKO_SLEEP}\n\n**Batch cancelled!** 💤\n✅{success} ❌{failed}")
+                    await status.edit_text(
+                        f"**╭━━━━━ ❌ Cancelled ━━━━━╮**\n\n"
+                        f"✅ {success} | ❌ {failed} | 📊 {total}\n\n"
+                        f"**╰━━━━━━━━━━━━━━━━━━━━━━╯**"
+                    )
                     return
     
                 try:
                     msg = await dc.get_messages(start_chat, mid)
                     if msg and msg.media:
-                        fp = await msg.download("downloads")
+                        file_size = msg.video.file_size if msg.video else msg.document.file_size if msg.document else msg.audio.file_size if msg.audio else 0
+                        progress_msg = await message.reply_text(
+                            f"**╭━━━ ⬇️ File {i+1}/{total} ━━━╮**\n\n"
+                            f"`{'○' * 20}`\n\n"
+                            f"**0.0%**\n"
+                            f"📦 **0.0** / **{file_size / 1024 / 1024:.1f} MB**\n\n"
+                            f"**╰━━━━━━━━━━━━━━━━━━━━━━╯**"
+                        )
+                        
+                        fp = await download_media(msg, "downloads", progress_msg)
+                        await progress_msg.delete()
+                        
                         if fp and os.path.exists(fp):
                             await send_media(message, fp, msg.text[:500] if msg.text else None)
                             batch_url = f"https://t.me/c/{str(start_chat)[4:]}/{mid}"
@@ -484,21 +513,45 @@ def register(bot: Client, db, get_user_client):
                             os.remove(fp)
                             success += 1
                             await db.increment_download(user_id)
+                            await increment_daily_count(user_id, db)
                     elif msg and msg.text:
                         await message.reply_text(f"📝 {msg.text[:500]}")
                         success += 1
+                    
                     if i % 5 == 0:
-                        await status.edit_text(f"{NEKO_DOWNLOADING}\n\n{i+1}/{total}\n✅{success} ❌{failed}")
+                        percent = (i + 1) / total * 100
+                        bar_length = 20
+                        filled = int(bar_length * (i + 1) / total)
+                        bar = "●" * filled + "○" * (bar_length - filled)
+                        
+                        await status.edit_text(
+                            f"**╭━━━━━ 📦 Batch {i+1}/{total} ━━━━━╮**\n\n"
+                            f"`{bar}`\n"
+                            f"**{percent:.1f}%**\n"
+                            f"✅ **{success}** | ❌ **{failed}**\n\n"
+                            f"**╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯**"
+                        )
+                    
                     await asyncio.sleep(1)
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
                 except:
                     failed += 1
     
-            await status.edit_text(f"{NEKO_SUCCESS}\n\n**Done!** ✅{success} ❌{failed} | 📊{total}")
+            await status.edit_text(
+                f"**╭━━━━━ ✅ Batch Complete ━━━━━╮**\n\n"
+                f"📊 Total: **{total}**\n"
+                f"✅ Success: **{success}**\n"
+                f"❌ Failed: **{failed}**\n\n"
+                f"**╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯**"
+            )
         except asyncio.CancelledError:
             try:
-                await status.edit_text(f"{NEKO_SLEEP}\n\n**Batch cancelled!** 💤\n✅{success} ❌{failed}")
+                await status.edit_text(
+                    f"**╭━━━━━ ❌ Cancelled ━━━━━╮**\n\n"
+                    f"✅ {success} | ❌ {failed} | 📊 {total}\n\n"
+                    f"**╰━━━━━━━━━━━━━━━━━━━━━━╯**"
+                )
             except:
                 pass
         finally:
