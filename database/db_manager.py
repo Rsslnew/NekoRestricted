@@ -7,6 +7,7 @@
 
 import logging
 from datetime import datetime
+from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import DB_URI, DB_NAME
 
