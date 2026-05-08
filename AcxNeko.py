@@ -5,13 +5,6 @@
 # GitHub    : https://github.com/Rsslnew
 # Telegram  : https://telegram.me/K69661
 
-#!/usr/bin/env python3
-"""
-AcxNeko - Restricted Content Downloader Bot
-Main entry point with dual-mode: User Login + Session String.
-Optimized for private channel access.
-"""
-
 import os
 import asyncio
 import logging
@@ -24,6 +17,7 @@ from config import (
 from database.db_manager import Database
 from handlers import start_help, download, settings, admin, auth, callbacks
 from neko_art import NEKO_BANNER, NEKO_SUCCESS, NEKO_SLEEP
+from utils.extras import daily_reset_loop
 
 # ==================== LOGGING SETUP ====================
 logging.basicConfig(
@@ -133,6 +127,10 @@ async def main():
     print(f"🔐 Login Mode: {'Enabled' if ALLOW_USER_LOGIN else 'Disabled'}")
     print(f"👤 Admin Fallback: {'Ready' if admin_client else 'None'}")
     print(f"🐱 Neko is purring and ready to serve!\n")
+
+    # ==================== START DAILY RESET LOOP ====================
+    asyncio.create_task(daily_reset_loop(db))
+    print("🔄 Daily reset loop started!")
 
     await asyncio.Event().wait()
 

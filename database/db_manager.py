@@ -7,7 +7,6 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import DB_URI, DB_NAME
 
@@ -277,3 +276,18 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting all sessions: {e}")
             return {}
+
+    # ==================== DAILY LIMIT ====================
+    async def reset_daily_count(self, user_id: int):
+        """Reset daily download count for user."""
+        await self.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"daily_count": 0, "last_reset": datetime.utcnow()}}
+        )
+    
+    async def reset_all_daily_counts(self):
+        """Reset all users' daily download counts at midnight."""
+        await self.users.update_many(
+            {},
+            {"$set": {"daily_count": 0, "last_reset": datetime.utcnow()}}
+        )

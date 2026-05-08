@@ -23,6 +23,10 @@ from neko_art import *
 from utils.progress import ProgressTracker, RateLimitTracker
 from utils.helpers import format_speed, format_eta, extract_link_info as extract_link
 from config import FORWARD_CHAT_ID, MAX_CONCURRENT_DOWNLOADS
+from utils.extras import (
+    check_force_sub, check_spam, 
+    check_daily_limit, increment_daily_count
+)
 
 logger = logging.getLogger(__name__)
 
@@ -249,11 +253,23 @@ def register(bot: Client, db, get_user_client):
         user_id = user.id
         username = user.username or "unknown"
         first_name = user.first_name or "unknown"
-    
+        
         if await db.is_banned(user_id):
             await message.reply_text(f"{NEKO_ANGRY}\n\n**You are banned!** 😾")
             return
-    
+        
+        # ==================== FORCE SUBSCRIBE ====================
+        if not await check_force_sub(bot, user_id, message):
+            return
+        
+        # ==================== ANTI-SPAM ====================
+        if not await check_spam(user_id, message):
+            return
+        
+        # ==================== DAILY LIMIT ====================
+        if not await check_daily_limit(user_id, db, message):
+            return
+        
         await db.add_user(user_id, username, first_name)
     
         if len(message.command) < 2:
@@ -391,6 +407,7 @@ def register(bot: Client, db, get_user_client):
                     os.remove(file_path)
     
                 await db.increment_download(user_id)
+                await increment_daily_count(user_id, db)
                 await message.reply_text(f"{NEKO_SUCCESS}\n\n**Done! Nyaa~!** 🎉\n📡 {client_source}")
     
         except FloodWait as e:
