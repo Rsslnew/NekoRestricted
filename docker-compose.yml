@@ -11,6 +11,8 @@ services:
     
     environment:
       - TZ=Asia/Jakarta
+      
+    user: "0:0"
     
     volumes:
       - ./downloads:/app/downloads

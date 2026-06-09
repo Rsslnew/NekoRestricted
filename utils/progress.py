@@ -9,17 +9,17 @@ import time
 from neko_art import NEKO_DOWNLOADING, NEKO_UPLOAD, NEKO_PROGRESS_FILLED, NEKO_PROGRESS_EMPTY
 
 class ProgressTracker:
-    """Modern progress bar with Neko themes & animations."""
-
     def __init__(self, message, total_size: int, action: str = "download"):
         self.message = message
         self.total = total_size
         self.current = 0
         self.start_time = time.time()
-        self.action = action  # "download" or "upload"
+        self.action = action
         self.done = False
         
-        # Animation frames
+        self.last_update = 0
+        self.min_interval = 10 #TelegramFloodwaitEdit
+        
         self.frames = {
             "download": ["⬇️", "📥", "⏬", "📨"],
             "upload": ["⬆️", "📤", "⏫", "📨"]
@@ -29,15 +29,19 @@ class ProgressTracker:
         self.empty = "○"
 
     def stop(self):
-        """Stop updating"""
         self.done = True
 
     async def update(self, current: int):
-        """Update progress display."""
         if self.done:
             return
             
         self.current = current
+        
+        now = time.time()
+        if now - self.last_update < self.min_interval:
+            return
+        
+        self.last_update = now
 
         if self.total > 0:
             percent = current * 100 / self.total
