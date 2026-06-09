@@ -13,6 +13,7 @@ from pyrogram import Client, filters
 
 from config import ADMINS
 from neko_art import *
+from bson import ObjectId
 
 def register(bot: Client, db):
     """Register admin handlers."""
@@ -64,7 +65,8 @@ def register(bot: Client, db):
             except Exception:
                 failed += 1
 
-            await asyncio.sleep(0.1)
+            #Telegram Sensitif 
+            await asyncio.sleep(0.5)
 
         await status_msg.edit_text(
             f"✅ Done\nSuccess: {success}\nFailed: {failed}"
@@ -174,6 +176,27 @@ def register(bot: Client, db):
     @bot.on_message(filters.command("premium_users"))
     @is_admin
     async def premium_users_command(client, message):
+    
+        try:
+            cursor = db.users.find({"is_premium": True})
+            premium_list = []
+            async for user in cursor:
+                uid = user.get("user_id", "?")
+                uname = user.get("username", "N/A")
+                expiry = user.get("premium_expiry")
+                expiry_str = expiry.strftime("%Y-%m-%d") if expiry else "No expiry"
+                premium_list.append(f"• `{uid}` | @{uname} | ⏰ {expiry_str}")
 
-        premium_users = await db.get_premium_users()
-        await message.reply_text(f"💎 Premium Users:\n{premium_users}")
+            if not premium_list:
+                await message.reply_text("💎 No premium users found.")
+                return
+
+            header = f"💎 **Premium Users** ({len(premium_list)})\n\n"
+            text = header + "\n".join(premium_list[:50])
+
+            if len(premium_list) > 50:
+                text += f"\n\n...dan {len(premium_list) - 50} user lainnya"
+
+            await message.reply_text(text)
+        except Exception as e:
+            await message.reply_text(f"❌ Error: `{str(e)[:200]}`")

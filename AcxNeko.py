@@ -1,6 +1,6 @@
 # AcXNeko - SaveContent video channel with privat or not
 # =============================================================================
-# Project   : AcxNekoBor
+# Project   : AcxNekoBot
 # Developer : Kazeru
 # GitHub    : https://github.com/Rsslnew
 # Telegram  : https://telegram.me/K69661
@@ -17,7 +17,7 @@ from config import (
 from database.db_manager import Database
 from handlers import start_help, download, settings, admin, auth, callbacks
 from neko_art import NEKO_BANNER, NEKO_SUCCESS, NEKO_SLEEP
-from utils.extras import daily_reset_loop
+from utils.extras import daily_reset_loop, load_daily_counts
 
 # ==================== LOGGING SETUP ====================
 logging.basicConfig(
@@ -55,12 +55,13 @@ user_clients = {}
 # ==================== REGISTER HANDLERS ====================
 def register_handlers():
     """Register all command handlers."""
-    
-    # Auth handler (returns get_user_client function)
-    get_user_client = auth.register(bot, db, admin_client)
 
-    # Start & Help
-    start_help.register(bot, db)
+    # Auth handler (returns get_user_client function)
+
+    get_user_client = auth.register(bot, db, admin_client, user_clients)
+
+    # Start & Help (butuh user_clients untuk cek status login)
+    start_help.register(bot, db, user_clients)
 
     # Download (pass get_user_client function)
     download.register(bot, db, get_user_client)
@@ -117,6 +118,10 @@ async def main():
             await db.delete_user_session(user_id)
 
     print(f"🔄 Restored {len(user_clients)} user sessions")
+
+    # Load daily counts dari database
+    await load_daily_counts(db)
+    print("🔄 Daily counts loaded from DB!")
 
     # Start bot
     await bot.start()

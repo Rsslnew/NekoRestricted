@@ -17,12 +17,12 @@ from config import ALLOW_USER_LOGIN, MAX_LOGIN_USERS, API_ID, API_HASH
 from neko_art import *
 
 logger = logging.getLogger(__name__)
-
-user_clients = {}
 pending_logins = {}
 
-def register(bot: Client, db, admin_client=None):
-    """Register authentication handlers."""
+def register(bot: Client, db, admin_client=None, user_clients=None):
+
+    if user_clients is None:
+        user_clients = {}
 
     async def get_user_client(user_id):
         if user_id == "admin":
@@ -93,7 +93,7 @@ def register(bot: Client, db, admin_client=None):
         )
 
     @bot.on_message(filters.text & ~filters.command([
-        "login", "logout", "dl", "bdl", "start", "help", "cancel",
+        "login", "logout", "dl", "bdl", "start", "help",
         "add_premium", "remove_premium", "whoami", "myplan", "premium",
         "settings", "set_caption", "see_caption", "del_caption",
         "set_thumb", "view_thumb", "del_thumb", "broadcast",
@@ -109,7 +109,15 @@ def register(bot: Client, db, admin_client=None):
         # Cancel: fix ✅
         if message.text and message.text.strip() == "/cancel":
             if user_id in pending_logins:
+                state = pending_logins[user_id]
+                temp_client = state.get("temp_client")
+                if temp_client:
+                    try:
+                        await temp_client.stop()
+                    except:
+                        pass
                 del pending_logins[user_id]
+                await message.reply_text(f"{NEKO_SLEEP}\n\n**Login cancelled!** 💤")
             return
 
         if user_id not in pending_logins:
@@ -144,14 +152,13 @@ def register(bot: Client, db, admin_client=None):
                     "Example: `1 2 3 4 5`"
                 )
             except Exception as e:
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
                 await status_msg.edit_text(f"❌ Failed: `{str(e)[:100]}`")
 
         # Step 2: Verification code
         elif state["step"] == "code":
             verification_code = message.text.strip()
-            # codee with spasi like 1 2 3 4 5
             temp_client = state.get("temp_client")
 
             if not temp_client:
@@ -172,7 +179,7 @@ def register(bot: Client, db, admin_client=None):
                 session_string = await temp_client.export_session_string()
                 await db.store_user_session(user_id, session_string)
 
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
 
                 new_client = Client(f"user_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string, in_memory=True)
@@ -190,15 +197,15 @@ def register(bot: Client, db, admin_client=None):
                 )
 
             except PhoneCodeInvalid:
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
                 await status_msg.edit_text("❌ Invalid code!")
             except PhoneCodeExpired:
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
                 await status_msg.edit_text("⏰ Code expired!")
             except Exception as e:
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
                 await status_msg.edit_text(f"❌ Failed: `{str(e)[:100]}`")
 
@@ -220,7 +227,7 @@ def register(bot: Client, db, admin_client=None):
                 session_string = await temp_client.export_session_string()
                 await db.store_user_session(user_id, session_string)
 
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
 
                 new_client = Client(f"user_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_string, in_memory=True)
@@ -238,11 +245,11 @@ def register(bot: Client, db, admin_client=None):
                 )
 
             except PasswordHashInvalid:
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
                 await status_msg.edit_text(f"{NEKO_ANGRY}\n\n**Wrong password!** 😾")
             except Exception as e:
-                await temp_client.disconnect()
+                await temp_client.stop()
                 del pending_logins[user_id]
                 await status_msg.edit_text(f"❌ Failed: `{str(e)[:100]}`")
 

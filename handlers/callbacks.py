@@ -29,7 +29,7 @@ def main_menu():
         ]
     ])
 
-def register(bot: Client, db, user_client: Client):
+def register(bot: Client, db, get_user_client=None):
     """Register callback handlers."""
 
     @bot.on_callback_query()
@@ -51,12 +51,12 @@ def register(bot: Client, db, user_client: Client):
                 return
 
         # ==================== BACK TO START ====================
-        
+
         if data == "back_to_start":
             # Cek premium
             is_premium = await db.is_premium(user_id)
             premium_status = "✅ Active" if is_premium else "❌ Inactive - Use /premium to upgrade!"
-            
+
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("📢 Update Channel", url="https://t.me/ACxio999"),
@@ -74,7 +74,7 @@ def register(bot: Client, db, user_client: Client):
                     InlineKeyboardButton("🔒 Close", callback_data="cancel")
                 ]
             ])
-            
+
             await callback_query.message.edit_text(
                 f"**Hi {first_name}!** 😁\n\n"
                 f"I am **AcxNeko** - Save Restricted Content Bot\n\n"
@@ -88,6 +88,18 @@ def register(bot: Client, db, user_client: Client):
             url = data[3:]
             await callback_query.message.delete()
             await client.send_message(callback_query.message.chat.id, f"/dl {url}")
+
+        # ==================== (NEWDONTEDIT!) ====================
+        elif data.startswith("batch_"):
+            url = data[6:]
+            await callback_query.message.delete()
+            await client.send_message(
+                callback_query.message.chat.id,
+                f"📦 **Batch Download**\n\n"
+                f"Detected link: `{url}`\n\n"
+                f"Please send the end link to complete batch:\n"
+                f"`/bdl {url} <end_link>`"
+            )
 
         # ==================== CANCEL ====================
         elif data == "cancel":
@@ -119,7 +131,7 @@ def register(bot: Client, db, user_client: Client):
             about_text = (
                 "∧,,,∧\n"
                 "( ^ω^)  **About AcxNeko**\n\n"
-                "🐱 **Version:** 2.0.0\n"
+                "🐱 **Version:** 2.1.0\n"
                 "💾 **Database:** MongoDB\n"
                 "👤 **Creator:** @K69661\n"
                 "📚 **Library:** Pyrogram\n\n"

@@ -9,10 +9,11 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from neko_art import NEKO_WAVE, NEKO_HELP, NEKO_SLEEP, NEKO_ANGRY
-from handlers.auth import user_clients
 
-def register(bot: Client, db):
-    """Register start and help handlers."""
+def register(bot: Client, db, user_clients=None):
+
+    if user_clients is None:
+        user_clients = {}
 
     @bot.on_message(filters.command("start"))
     async def start_command(client, message):
@@ -32,13 +33,9 @@ def register(bot: Client, db):
                 "Contact admin if you think this is a mistake."
             )
             return
-
-        # Login status
-        try:
-            is_logged_in = user_id in user_clients
-            login_status = "🔐 Logged In" if is_logged_in else "🔓 Not Logged In"
-        except:
-            login_status = "🔓 Not Logged In"
+            
+        is_logged_in = user_id in user_clients
+        login_status = "🔐 Logged In" if is_logged_in else "🔓 Not Logged In"
 
         # status prem ✅
         is_premium = await db.is_premium(user_id)
