@@ -8,17 +8,17 @@ RUN apt-get update && apt-get install -y \
     libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (better caching)
-COPY requirements.txt .
+RUN groupadd -r neko && useradd -r -g neko -d /app neko
 
-# Install Python dependencies
+# Copy requirements first (Docker layer caching)
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot files
 COPY . .
 
-# Create directories
-RUN mkdir -p downloads thumbnails logs
+RUN mkdir -p downloads thumbnails logs && chown -R neko:neko /app
+
+USER neko
 
 # Run bot
 CMD ["python", "AcxNeko.py"]

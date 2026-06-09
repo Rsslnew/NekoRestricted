@@ -1,13 +1,35 @@
 version: '3.8'
 
 services:
-  acx-neko-bot:
+  neko-bot:
     build: .
-    container_name: acx-neko-bot
+    container_name: neko-bot
     restart: unless-stopped
+    
     env_file:
       - config.env
-    volumes:
-      - ./downloads:/app/downloads
+    
     environment:
       - TZ=Asia/Jakarta
+    
+    volumes:
+      - ./downloads:/app/downloads
+      - ./thumbnails:/app/thumbnails
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+    
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/AcxNeko.py') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+      
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
