@@ -15,7 +15,7 @@ from config import (
     SESSION_STRING, ALLOW_USER_LOGIN
 )
 from database.db_manager import Database
-from handlers import start_help, download, settings, admin, auth, callbacks, youtube
+from handlers import start_help, download, settings, admin, auth, callbacks
 from neko_art import NEKO_BANNER, NEKO_SUCCESS, NEKO_SLEEP
 from utils.extras import daily_reset_loop, load_daily_counts
 
@@ -74,8 +74,6 @@ def register_handlers():
 
     # Callbacks (pass get_user_client function)
     callbacks.register(bot, db, get_user_client)
-    
-    youtube.register(bot, db)
 
 # ==================== MAIN ====================
 async def main():
