@@ -88,11 +88,6 @@ def register(bot: Client, db, user_clients=None):
 🐾 `/settings` - Open settings menu
 🐾 `/myplan` - Check your current plan
 🐾 `/premium` - View premium info
-**YouTube Commands:**
-🎬 `/yt <link>` - Download YouTube video
-🎵 `/yt <link> audio` - Download MP3 only
-🚫 `/cancel_yt` - Cancel active download
-
 
 **Customization Commands:**
 🎨 `/set_caption <text>` - Set custom caption
