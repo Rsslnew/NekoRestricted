@@ -75,7 +75,6 @@ def register_handlers():
     # Callbacks (pass get_user_client function)
     callbacks.register(bot, db, get_user_client)
     
-    # YouTube Downloader
     youtube.register(bot, db)
 
 # ==================== MAIN ====================
