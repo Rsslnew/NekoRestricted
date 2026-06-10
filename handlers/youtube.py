@@ -13,33 +13,43 @@ from utils.youtube_downloader import is_youtube_url, get_video_info, download_vi
 logger = logging.getLogger(__name__)
 PENDING = {}
 
+
 class YTProgressAdapter:
 
     def __init__(self, message, action="download"):
         self.message = message
         self.action = action
         self.tracker = None
-        self.loop = asyncio.get_event_loop()
+        try:
+            self.loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
 
-    async def _update(self, current, total):
+    def _ensure_tracker(self, total):
         if self.tracker is None and total > 0:
             self.tracker = ProgressTracker(self.message, total, self.action)
+        if self.tracker and self.tracker.total != total:
+            self.tracker.total = total
+
+    async def _do_update(self, current, total):
+        self._ensure_tracker(total)
         if self.tracker:
-            if self.tracker.total != total:
-                self.tracker.total = total
             await self.tracker.update(current)
 
     def render(self, current, total, action_name):
         try:
-            asyncio.run_coroutine_threadsafe(
-                self._update(current, total),
-                self.loop
-            )
+            if self.loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._do_update(current, total),
+                    self.loop
+                )
         except Exception:
             pass
 
 
 def register(bot: Client, db):
+    """Register YouTube handler."""
 
     @bot.on_message(filters.command("yt"))
     async def youtube_command(client, message):
@@ -48,7 +58,8 @@ def register(bot: Client, db):
                 f"{NEKO_CONFUSED}\n\n"
                 f"**Usage:** `/yt <youtube_link>`\n\n"
                 f"Example:\n"
-                f"`/yt https://youtube.com/watch?v=xxxxx`"
+                f"`/yt https://youtube.com/watch?v=xxxxx`",
+                disable_web_page_preview=True
             )
             return
 
@@ -57,21 +68,34 @@ def register(bot: Client, db):
         if not is_youtube_url(url):
             await message.reply_text(
                 f"{NEKO_CONFUSED}\n\n"
-                f"**Not a YouTube link!** 😾"
+                f"**Not a YouTube link!** 😾",
+                disable_web_page_preview=True
             )
             return
 
         status = await message.reply_text(
-            f"{NEKO_LOADING}\n\n🔍 **Youtube video info...**"
+            f"{NEKO_LOADING}\n\n🔍 **Fetching video info...**",
+            disable_web_page_preview=True
         )
 
         loop = asyncio.get_event_loop()
         info = await loop.run_in_executor(None, get_video_info, url)
 
         if not info:
-            await status.edit_text(
-                f"{NEKO_SAD}\n\n❌ **Failed to get video info.**"
-            )
+            try:
+                await status.edit_text(
+                    f"{NEKO_SAD}\n\n❌ **Failed to get video info.**\n\n"
+                    f"💡 Possible reasons:\n"
+                    f"• Video is private/restricted\n"
+                    f"• YouTube blocked the request\n"
+                    f"• Try again later",
+                    disable_web_page_preview=True
+                )
+            except Exception:
+                await message.reply_text(
+                    f"{NEKO_SAD}\n\n❌ **Failed to get video info.**",
+                    disable_web_page_preview=True
+                )
             return
 
         user_id = message.from_user.id
@@ -108,7 +132,24 @@ def register(bot: Client, db):
 
         buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="yt_cancel")])
 
-        await status.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+        try:
+            await status.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            logger.warning(f"Edit failed, sending new message: {e}")
+            try:
+                await status.delete()
+            except:
+                pass
+            new_msg = await message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                disable_web_page_preview=True
+            )
+            PENDING[user_id]["status_msg"] = new_msg
 
     @bot.on_callback_query(filters.regex(r"^yt_"))
     async def youtube_callback(client, callback_query):
@@ -117,7 +158,7 @@ def register(bot: Client, db):
 
         pending = PENDING.pop(user_id, None)
         if not pending:
-            await callback_query.answer("Session expired.", show_alert=True)
+            await callback_query.answer("Session expired. Please send /yt again.", show_alert=True)
             return
 
         url = pending["url"]
@@ -125,9 +166,13 @@ def register(bot: Client, db):
         status_msg = pending["status_msg"]
 
         if data == "yt_cancel":
-            await status_msg.edit_text(
-                f"{NEKO_SAD}\n\n❌ **Cancelled.**"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_SAD}\n\n❌ **Cancelled.**",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
             await callback_query.answer()
             return
 
@@ -138,18 +183,26 @@ def register(bot: Client, db):
 
         if data == "yt_mp3":
             fmt_type = "mp3"
-            await status_msg.edit_text(
-                f"{NEKO_LOADING}\n\n📥 **Downloading MP3...**"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_LOADING}\n\n📥 **Downloading MP3...**",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
         elif data.startswith("yt_mp4_"):
             parts = data.split("_")
             height = parts[-1]
             fmt_id = "_".join(parts[2:-1])
-            await status_msg.edit_text(
-                f"{NEKO_LOADING}\n\n📥 **Downloading {height}p MP4...**"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_LOADING}\n\n📥 **Downloading {height}p MP4...**",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
 
-        await callback_query.answer()
+        await callback_query.answer("Download started!", show_alert=False)
 
         # Download
         loop = asyncio.get_event_loop()
@@ -170,15 +223,26 @@ def register(bot: Client, db):
             )
         except Exception as e:
             logger.error(f"YouTube download error: {e}")
-            await status_msg.edit_text(
-                f"{NEKO_SAD}\n\n❌ **Download failed:** `{str(e)[:200]}`"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_SAD}\n\n❌ **Download failed:** `{str(e)[:200]}`",
+                    disable_web_page_preview=True
+                )
+            except:
+                await callback_query.message.reply_text(
+                    f"{NEKO_SAD}\n\n❌ **Download failed.**"
+                )
             return
 
         if not filepath or not filepath.exists():
-            await status_msg.edit_text(
-                f"{NEKO_SAD}\n\n❌ **Download failed.**"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_SAD}\n\n❌ **Download failed.**\n\n"
+                    f"Video may be restricted or too large.",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
             return
 
         # Check size
@@ -186,20 +250,28 @@ def register(bot: Client, db):
         size_mb = file_size / 1024 / 1024
 
         if file_size > MAX_FILE_SIZE:
-            await status_msg.edit_text(
-                f"{NEKO_SAD}\n\n"
-                f"❌ **File too large!** "
-                f"({size_mb:.1f} MB > {MAX_FILE_SIZE/1024/1024:.0f} MB limit)"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_SAD}\n\n"
+                    f"❌ **File too large!** "
+                    f"({size_mb:.1f} MB > {MAX_FILE_SIZE/1024/1024:.0f} MB limit)",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
             try:
                 filepath.unlink()
             except:
                 pass
             return
 
-        await status_msg.edit_text(
-            f"{NEKO_LOADING}\n\n📤 **Uploading...**"
-        )
+        try:
+            await status_msg.edit_text(
+                f"{NEKO_LOADING}\n\n📤 **Uploading...**",
+                disable_web_page_preview=True
+            )
+        except:
+            pass
 
         # Upload with progress
         upload_progress = YTProgressAdapter(status_msg, "upload")
@@ -222,24 +294,41 @@ def register(bot: Client, db):
                     progress=upload_progress_callback
                 )
 
-            await status_msg.edit_text(
-                f"{NEKO_SUCCESS}\n\n✅ **Done!** 📦 {size_mb:.1f} MB"
-            )
+            try:
+                await status_msg.edit_text(
+                    f"{NEKO_SUCCESS}\n\n✅ **Done!** 📦 {size_mb:.1f} MB",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
 
         except Exception as e:
             logger.error(f"YouTube upload error: {e}")
             # Fallback to document
-            await callback_query.message.reply_document(
-                str(filepath),
-                caption=f"📦 **{info['title'][:80]}**\n📦 {size_mb:.1f} MB"
-            )
-            await status_msg.edit_text(
-                f"{NEKO_SUCCESS}\n\n✅ **Sent as document!**"
-            )
+            try:
+                await callback_query.message.reply_document(
+                    str(filepath),
+                    caption=f"📦 **{info['title'][:80]}**\n📦 {size_mb:.1f} MB"
+                )
+                try:
+                    await status_msg.edit_text(
+                        f"{NEKO_SUCCESS}\n\n✅ **Sent as document!**",
+                        disable_web_page_preview=True
+                    )
+                except:
+                    pass
+            except Exception as e2:
+                logger.error(f"Fallback upload failed: {e2}")
+                try:
+                    await status_msg.edit_text(
+                        f"{NEKO_SAD}\n\n❌ **Upload failed.**",
+                        disable_web_page_preview=True
+                    )
+                except:
+                    pass
 
         finally:
             try:
                 filepath.unlink()
             except:
                 pass
-                
