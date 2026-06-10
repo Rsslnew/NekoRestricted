@@ -1,436 +1,398 @@
-# AcXNeko - YouTube Downloader Module
+# AcXNeko - YouTube Downloader
 # =============================================================================
 # Project   : AcxNekoBot
 # Developer : Kazeru
 # GitHub    : https://github.com/Rsslnew
 # Telegram  : https://telegram.me/K69661
-#NEW YOUTUBE
+
 import os
 import re
 import asyncio
 import logging
-import subprocess
-from datetime import datetime
+import json
 
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from neko_art import *
+from config import MAX_CONCURRENT_DOWNLOADS
 from utils.progress import ProgressTracker
 from utils.extras import check_force_sub, check_spam, check_daily_limit, increment_daily_count
-from config import FREE_DAILY_LIMIT, MAX_CONCURRENT_DOWNLOADS
 
 logger = logging.getLogger(__name__)
 
-# Regex untuk deteksi link YouTube
-YT_REGEX = re.compile(
-    r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/'
-    r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
-)
+YT_PATTERNS = [
+    re.compile(r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})'),
+    re.compile(r'(?:https?://)?(?:www\.)?youtu\.be/([a-zA-Z0-9_-]{11})'),
+    re.compile(r'(?:https?://)?(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})'),
+]
 
-active_yt_downloads = {}
+active_yt = {}
+yt_urls = {}
 
-def register(bot: Client, db):
+def extract_yt_id(url: str) -> str | None:
+    for p in YT_PATTERNS:
+        m = p.search(url)
+        if m:
+            return m.group(1)
+    return None
 
 
-    def extract_yt_id(url: str) -> str | None:
+def is_yt(url: str) -> bool:
+    return extract_yt_id(url) is not None
 
-        match = YT_REGEX.match(url)
-        if match:
-            return match.group(6)
-        return None
 
-    def get_video_info(url: str) -> dict:
+async def yt_info(url: str) -> dict:
 
-        try:
-            cmd = [
-                "yt-dlp",
-                "--dump-json",
-                "--no-download",
-                "-f", "best",
-                url
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0 and result.stdout:
-                import json
-                return json.loads(result.stdout.strip().split('\n')[0])
-            return {}
-        except Exception as e:
-            logger.error(f"Info extraction error: {e}")
-            return {}
-
-    async def download_youtube(url: str, output_path: str, format_type: str = "video", 
-                               quality: str = "best", progress_msg=None, user_id: int = None):
-        """Download YouTube video/audio using yt-dlp."""
-        
-        output_template = os.path.join(output_path, "%(title)s.%(ext)s")
-        
-        if format_type == "audio":
-            cmd = [
-                "yt-dlp",
-                "-f", "bestaudio[ext=m4a]/bestaudio",
-                "--extract-audio",
-                "--audio-format", "mp3",
-                "--audio-quality", "0",
-                "-o", output_template,
-                "--newline",
-                "--progress",
-                url
-            ]
-        else:
-            # Video format
-            if quality == "best":
-                format_spec = "best[filesize<<2G]/bestvideo[filesize<<2G]+bestaudio/best"
-            elif quality == "720":
-                format_spec = "best[height<=720][filesize<<2G]/best[height<=720]"
-            elif quality == "480":
-                format_spec = "best[height<=480][filesize<<2G]/best[height<=480]"
-            else:
-                format_spec = "best[filesize<<2G]/best"
-            
-            cmd = [
-                "yt-dlp",
-                "-f", format_spec,
-                "-o", output_template,
-                "--newline",
-                "--progress",
-                "--merge-output-format", "mp4",
-                url
-            ]
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "yt-dlp", "--dump-json", "--no-download", "-f", "best", url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode == 0 and stdout:
+            return json.loads(stdout.decode().strip().split("\n")[0])
+    except Exception as e:
+        logger.error(f"yt-dlp info error: {e}")
+    return {}
 
-        downloaded_file = None
-        last_progress = 0
 
-        while True:
-            if user_id and not active_yt_downloads.get(user_id, True):
-                process.kill()
-                raise Exception("Cancelled")
+async def yt_dl(url: str, out_dir: str, fmt: str, quality: str, msg, uid: int, total_size: int = 0):
 
-            line = await process.stdout.readline()
-            if not line:
-                break
+    os.makedirs(out_dir, exist_ok=True)
+    tmpl = os.path.join(out_dir, "%(title)s.%(ext)s")
 
-            line = line.decode('utf-8', errors='ignore').strip()
-            
-            # Parse progress
-            if '[download]' in line and '%' in line:
-                try:
-                    percent_str = line.split('%')[0].split()[-1]
-                    percent = float(percent_str)
-                    
-                    if progress_msg and percent - last_progress >= 5:
-                        last_progress = percent
-                        bar_length = 20
-                        filled = int(bar_length * percent / 100)
-                        bar = "●" * filled + "○" * (bar_length - filled)
-                        
-                        await progress_msg.edit_text(
-                            f"**╭━━━ 📥 YouTube Download ━━━╮**\n\n"
-                            f"`{bar}`\n\n"
-                            f"**{percent:.1f}%**\n\n"
-                            f"**╰━━━━━━━━━━━━━━━━━━━━━━╯**"
-                        )
-                except:
+    # Init ProgressTracker
+    tracker = ProgressTracker(msg, total_size, "download")
+
+    if fmt == "audio":
+        cmd = [
+            "yt-dlp",
+            "-f", "bestaudio[ext=m4a]/bestaudio",
+            "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
+            "-o", tmpl, "--newline", "--progress",
+            url
+        ]
+    else:
+        if quality == "720":
+            fspec = "best[height<=720][filesize<<1800M]/best[height<=720]"
+        elif quality == "480":
+            fspec = "best[height<=480][filesize<<1800M]/best[height<=480]"
+        else:
+            fspec = "best[filesize<<1800M]/bestvideo[filesize<<1800M]+bestaudio/best"
+        cmd = [
+            "yt-dlp", "-f", fspec, "-o", tmpl,
+            "--newline", "--progress", "--merge-output-format", "mp4",
+            url
+        ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    fp = None
+
+    while True:
+        if not active_yt.get(uid, True):
+            proc.kill()
+            tracker.stop()
+            raise asyncio.CancelledError()
+
+        line = await proc.stdout.readline()
+        if not line:
+            break
+
+        txt = line.decode("utf-8", errors="ignore").strip()
+
+        # Parse progress & update ProgressTracker
+        if "[download]" in txt and "%" in txt:
+            try:
+                pct = float(txt.split("%")[0].split()[-1])
+                if total_size > 0:
+                    current_bytes = int(pct * total_size / 100)
+                    await tracker.update(current_bytes)
+                else:
+                    # Fallback kalau size tidak diketahui: edit manual
                     pass
+            except Exception:
+                pass
+
+        # Deteksi filename
+        if "Destination:" in txt:
+            fp = txt.split("Destination:", 1)[1].strip()
+        elif "[Merger]" in txt and '"' in txt:
+            try:
+                fp = txt.split('"')[1]
+            except:
+                pass
+
+    await proc.wait()
+    tracker.stop()
+
+    # Fallback cari file terbaru
+    if not fp or not os.path.exists(fp):
+        files = [os.path.join(out_dir, f) for f in os.listdir(out_dir)]
+        files = [f for f in files if os.path.isfile(f)]
+        if files:
+            fp = max(files, key=os.path.getctime)
+
+    return fp
 
 
-            if 'Destination:' in line or 'Merged' in line:
-                parts = line.split(':')
-                if len(parts) > 1:
-                    downloaded_file = parts[1].strip()
+def register(bot: Client, db):
+    """Register semua handler YouTube."""
 
-        await process.wait()
-        
-
-        if not downloaded_file or not os.path.exists(downloaded_file):
-            files = os.listdir(output_path)
-            if files:
-
-                files = [os.path.join(output_path, f) for f in files]
-                downloaded_file = max(files, key=os.path.getctime)
-        
-        return downloaded_file
-
-    # ==================== YOUTUBE COMMAND ====================
+    # ==================== /yt COMMAND ====================
     @bot.on_message(filters.command("yt"))
-    async def youtube_command(client, message):
-        user = message.from_user
+    async def yt_cmd(c, m):
+        user = m.from_user
         if not user:
             return
 
-        user_id = user.id
-        username = user.username or "unknown"
-        first_name = user.first_name or "unknown"
-
-        # Check banned
-        if await db.is_banned(user_id):
-            await message.reply_text(f"{NEKO_ANGRY}\n\n**You are banned!** 😾")
+        uid = user.id
+        if await db.is_banned(uid):
+            return await m.reply_text(f"{NEKO_ANGRY}\n\n**You are banned!** 😾")
+        if not await check_force_sub(bot, uid, m):
+            return
+        if not await check_spam(uid, m):
+            return
+        if not await check_daily_limit(uid, db, m):
             return
 
-        # Force sub
-        if not await check_force_sub(bot, user_id, message):
-            return
+        await db.add_user(uid, user.username, user.first_name)
 
-        # Anti spam
-        if not await check_spam(user_id, message):
-            return
-
-        # Daily limit
-        if not await check_daily_limit(user_id, db, message):
-            return
-
-        await db.add_user(user_id, username, first_name)
-
-        if len(message.command) < 2:
-            await message.reply_text(
+        if len(m.command) < 2:
+            return await m.reply_text(
                 f"{NEKO_CONFUSED}\n\n"
-                "**Usage:** `/yt <link>`\n\n"
+                "**Usage:**\n"
+                "`/yt <youtube_link>` — download video\n"
+                "`/yt <link> audio` — download MP3\n\n"
                 "**Examples:**\n"
-                "`/yt https://youtube.com/watch?v=xxxxx`\n"
-                "`/yt https://youtu.be/xxxxx`\n\n"
-                "**Optional:** Tambahkan `audio` untuk MP3 only\n"
-                "`/yt <link> audio`"
+                "`/yt https://youtu.be/RvnkAtWcKYg`\n"
+                "`/yt https://youtu.be/RvnkAtWcKYg audio`"
             )
-            return
 
-        url = message.command[1]
-        format_type = "audio" if len(message.command) > 2 and message.command[2].lower() == "audio" else "video"
+        url = m.command[1]
+        if not is_yt(url):
+            return await m.reply_text(f"{NEKO_ANGRY}\n\n**Invalid YouTube link!** 😾")
 
-        # Validate URL
-        video_id = extract_yt_id(url)
-        if not video_id:
-            await message.reply_text(f"{NEKO_ANGRY}\n\n**Invalid YouTube link!** 😾")
-            return
+        fmt = "audio" if len(m.command) > 2 and m.command[2].lower() == "audio" else "video"
 
-        # Check concurrent
-        active_count = len([d for d in active_yt_downloads.values() if d])
-        if active_count >= MAX_CONCURRENT_DOWNLOADS:
-            await message.reply_text(
-                f"⏳ **Server busy!**\n"
-                f"🔴 Active downloads: **{active_count}**/{MAX_CONCURRENT_DOWNLOADS}"
-            )
-            return
+        # Cek concurrent
+        if len([v for v in active_yt.values() if v is True]) >= MAX_CONCURRENT_DOWNLOADS:
+            return await m.reply_text("⏳ **Server busy!** Please wait...")
 
-        # Get info
-        loading = await message.reply_text(f"{NEKO_LOADING}\n\n**Fetching info...** 🔍")
-        
+        loading = await m.reply_text(f"{NEKO_LOADING}\n\n**Fetching info...** 🔍")
+
         try:
-            info = await asyncio.to_thread(get_video_info, url)
-            title = info.get('title', 'Unknown Title')
-            duration = info.get('duration', 0)
-            uploader = info.get('uploader', 'Unknown')
-            
-            # Format duration
-            mins, secs = divmod(duration, 60)
+            info = await yt_info(url)
+            title = info.get("title", "YouTube Video")
+            dur = info.get("duration", 0)
+            mins, secs = divmod(dur, 60)
             hrs, mins = divmod(mins, 60)
-            duration_str = f"{hrs:02d}:{mins:02d}:{secs:02d}" if hrs else f"{mins:02d}:{secs:02d}"
-            
+            dstr = f"{hrs:02d}:{mins:02d}:{secs:02d}" if hrs else f"{mins:02d}:{secs:02d}"
+
+            # Ambil total size untuk ProgressTracker
+            total_size = 0
+            if info.get("filesize"):
+                total_size = info["filesize"]
+            elif info.get("filesize_approx"):
+                total_size = info["filesize_approx"]
+
             await loading.edit_text(
                 f"**╭━━━━━ 🎬 Video Found ━━━━━╮**\n\n"
-                f"🎵 **{title[:50]}...**\n" if len(title) > 50 else f"🎵 **{title}**\n"
-                f"👤 **Channel:** {uploader}\n"
-                f"⏱ **Duration:** {duration_str}\n"
-                f"📦 **Format:** {'🎵 MP3 (Audio)' if format_type == 'audio' else '📹 Video'}\n\n"
+                f"🎵 **{title[:55]}{'...' if len(title) > 55 else ''}**\n"
+                f"⏱ **Duration:** {dstr}\n"
+                f"📦 **Format:** {'🎵 MP3' if fmt == 'audio' else '📹 Video'}\n\n"
                 f"**╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯**"
             )
 
-            # Quality selection for video
-            if format_type == "video":
-                keyboard = InlineKeyboardMarkup([
+            if fmt == "audio":
+                await loading.delete()
+                await run_dl(m, url, "audio", "best", uid, title, db, total_size)
+            else:
+                kb = InlineKeyboardMarkup([
                     [
-                        InlineKeyboardButton("🎬 Best", callback_data=f"yt_best_{video_id}"),
-                        InlineKeyboardButton("📺 720p", callback_data=f"yt_720_{video_id}")
+                        InlineKeyboardButton("🎬 Best", callback_data=f"ytq|best|{uid}"),
+                        InlineKeyboardButton("📺 720p", callback_data=f"ytq|720|{uid}")
                     ],
                     [
-                        InlineKeyboardButton("📱 480p", callback_data=f"yt_480_{video_id}"),
-                        InlineKeyboardButton("🎵 Audio Only", callback_data=f"yt_audio_{video_id}")
+                        InlineKeyboardButton("📱 480p", callback_data=f"ytq|480|{uid}"),
+                        InlineKeyboardButton("🎵 Audio Only", callback_data=f"ytq|audio|{uid}")
                     ],
                     [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
                 ])
+                yt_urls[uid] = (url, total_size)
                 await loading.edit_text(
                     f"**╭━━━━━ 🎬 Select Quality ━━━━━╮**\n\n"
                     f"🎵 **{title[:40]}**\n\n"
                     f"**╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯**",
-                    reply_markup=keyboard
+                    reply_markup=kb
                 )
-                # Store URL in memory for callback
-                active_yt_downloads[f"url_{user_id}"] = url
-                return
-
-            # Direct audio download
-            await start_download(message, url, format_type, "best", user_id, title)
 
         except Exception as e:
-            logger.error(f"YouTube info error: {e}")
-            await loading.edit_text(f"{NEKO_SAD}\n\n**Failed to get info!** 😿\n`{str(e)[:100]}`")
+            logger.error(f"YT cmd error: {e}")
+            await loading.edit_text(f"{NEKO_SAD}\n\n**Failed!** 😿\n`{str(e)[:100]}`")
 
-    async def start_download(message, url, format_type, quality, user_id, title):
-        """Start actual download and upload."""
-        os.makedirs("downloads/youtube", exist_ok=True)
-        
-        progress_msg = await message.reply_text(
+    # ==================== CALLBACK QUALITY ====================
+    @bot.on_callback_query(filters.regex(r"^ytq\|(.+?)\|(\d+)$"))
+    async def ytq_cb(c, cq):
+        parts = cq.data.split("|")
+        q = parts[1]
+        uid = int(parts[2])
+
+        if cq.from_user.id != uid:
+            return await cq.answer("Bukan pesananmu!", show_alert=True)
+
+        data = yt_urls.pop(uid, None)
+        if not data:
+            return await cq.answer("Session expired, send link again.", show_alert=True)
+
+        url, total_size = data
+        await cq.message.delete()
+
+        info = await yt_info(url)
+        title = info.get("title", "YouTube Video")
+        fmt = "audio" if q == "audio" else "video"
+        qmap = {"best": "best", "720": "720", "480": "480", "audio": "best"}
+        await run_dl(cq.message, url, fmt, qmap.get(q, "best"), uid, title, db, total_size)
+
+    # ==================== AUTO DETECT YT LINK ====================
+    @bot.on_message(
+        filters.regex(r'(?:https?://)?(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s]+')
+        & ~filters.command([
+            "yt", "start", "help", "settings", "cancel", "cancel_yt",
+            "dl", "bdl", "login", "logout", "whoami", "myplan", "premium",
+            "set_caption", "see_caption", "del_caption", "set_thumb",
+            "view_thumb", "del_thumb", "broadcast", "ban", "unban",
+            "users", "premium_users", "stats"
+        ])
+    )
+    async def auto_yt(c, m):
+        if not m.text:
+            return
+
+        urls = re.findall(r'(?:https?://)?(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s]+', m.text)
+        if not urls:
+            return
+
+        url = urls[0]
+        if not is_yt(url):
+            return
+
+        uid = m.from_user.id
+        info = await yt_info(url)
+        total_size = info.get("filesize") or info.get("filesize_approx") or 0
+        yt_urls[uid] = (url, total_size)
+
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📹 Video", callback_data=f"ytauto|video|{uid}"),
+                InlineKeyboardButton("🎵 Audio", callback_data=f"ytauto|audio|{uid}")
+            ],
+            [InlineKeyboardButton("❌ Ignore", callback_data="cancel")]
+        ])
+        await m.reply_text(
+            f"{NEKO_FOUND}\n\n**YouTube link detected!** 🎬\nPilih format:",
+            reply_markup=kb
+        )
+
+    @bot.on_callback_query(filters.regex(r"^ytauto\|(video|audio)\|(\d+)$"))
+    async def ytauto_cb(c, cq):
+        parts = cq.data.split("|")
+        fmt = parts[1]
+        uid = int(parts[2])
+
+        if cq.from_user.id != uid:
+            return await cq.answer("Bukan pesananmu!", show_alert=True)
+
+        data = yt_urls.pop(uid, None)
+        if not data:
+            return await cq.answer("Expired, kirim ulang link.", show_alert=True)
+
+        url, total_size = data
+        await cq.message.delete()
+
+        info = await yt_info(url)
+        title = info.get("title", "YouTube Video")
+        await run_dl(cq.message, url, fmt, "best", uid, title, db, total_size)
+
+    # ==================== CANCEL YT ====================
+    @bot.on_message(filters.command("cancel_yt"))
+    async def cancel_yt(c, m):
+        uid = m.from_user.id
+        active_yt[uid] = False
+        await m.reply_text(f"{NEKO_SLEEP}\n\n**Download cancelled!** 💤")
+
+    # ==================== CORE DOWNLOAD & UPLOAD ====================
+    async def run_dl(message, url, fmt, quality, uid, title, db, total_size: int = 0):
+        progress = await message.reply_text(
             f"**╭━━━ 📥 Starting Download ━━━╮**\n\n"
             f"`{'○' * 20}`\n\n"
             f"**0.0%**\n\n"
             f"**╰━━━━━━━━━━━━━━━━━━━━━━╯**"
         )
-
-        active_yt_downloads[user_id] = True
+        active_yt[uid] = True
 
         try:
-            file_path = await download_youtube(
-                url, "downloads/youtube", format_type, quality, 
-                progress_msg, user_id
-            )
+            fp = await yt_dl(url, "downloads/youtube", fmt, quality, progress, uid, total_size)
 
-            if not file_path or not os.path.exists(file_path):
-                await progress_msg.delete()
-                await message.reply_text(f"{NEKO_SAD}\n\n**Download failed!** 😿")
-                return
+            if not fp or not os.path.exists(fp):
+                await progress.delete()
+                return await message.reply_text(f"{NEKO_SAD}\n\n**Download failed!** 😿")
 
-            file_size = os.path.getsize(file_path)
-            if file_size > 2 * 1024 * 1024 * 1024:  # 2GB limit
-                os.remove(file_path)
-                await progress_msg.delete()
-                await message.reply_text(f"{NEKO_ANGRY}\n\n**File too large!** > 2GB 😿")
-                return
+            size = os.path.getsize(fp)
+            if size > 2 * 1024 * 1024 * 1024:
+                os.remove(fp)
+                await progress.delete()
+                return await message.reply_text(f"{NEKO_ANGRY}\n\n**File too large!** > 2GB 😿")
 
-            await progress_msg.delete()
+            await progress.delete()
 
-            # Upload
+            caption = await db.get_caption(uid) or f"🎬 **{title}**\n\n📥 Downloaded via AcxNeko"
+            thumb = await db.get_thumbnail(uid)
+            thumb = thumb if thumb and os.path.exists(thumb) else None
+
             upload_msg = await message.reply_text(f"{NEKO_UPLOAD}\n\n**Uploading...** 📤")
-            
-            caption = await db.get_caption(user_id) or f"🎬 **{title}**\n\n📥 Downloaded via AcxNeko"
-            thumb_path = await db.get_thumbnail(user_id)
+            upload_tracker = ProgressTracker(upload_msg, size, "upload")
 
-            if format_type == "audio":
-                await message.reply_audio(
-                    file_path,
-                    caption=caption,
-                    title=title,
-                    thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None
-                )
-            else:
-                await message.reply_video(
-                    file_path,
-                    caption=caption,
-                    supports_streaming=True,
-                    thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None
-                )
+            async def upload_progress(current, total):
+                await upload_tracker.update(current)
 
-            await upload_msg.delete()
-            await message.reply_text(f"{NEKO_SUCCESS}\n\n**Done! Nyaa~!** 🎉")
+            try:
+                if fmt == "audio":
+                    await message.reply_audio(fp, caption=caption, title=title, thumb=thumb, progress=upload_progress)
+                else:
+                    await message.reply_video(fp, caption=caption, supports_streaming=True, thumb=thumb, progress=upload_progress)
+            except Exception as e:
+                logger.error(f"Upload error: {e}")
+                upload_tracker.stop()
+                await message.reply_document(fp, caption=caption, thumb=thumb)
+            finally:
+                upload_tracker.stop()
+                try:
+                    await upload_msg.delete()
+                except:
+                    pass
+                try:
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                except:
+                    pass
 
             # Update stats
-            await db.increment_download(user_id)
-            await increment_daily_count(user_id, db)
+            await db.increment_download(uid)
+            await increment_daily_count(uid, db)
 
-            # Cleanup
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            await message.reply_text(f"{NEKO_SUCCESS}\n\n**Done! Nyaa~!** 🎉")
 
+        except asyncio.CancelledError:
+            await message.reply_text(f"{NEKO_SLEEP}\n\n**Cancelled!** 💤")
         except Exception as e:
-            if "Cancelled" in str(e):
-                await message.reply_text(f"{NEKO_SLEEP}\n\n**Download cancelled!** 💤")
-            else:
-                logger.error(f"YouTube download error: {e}")
-                await message.reply_text(f"{NEKO_ANGRY}\n\n**Failed!** 😿\n`{str(e)[:150]}`")
+            logger.error(f"YT run_dl error: {e}")
+            await message.reply_text(f"{NEKO_ANGRY}\n\n**Failed!** 😿\n`{str(e)[:150]}`")
         finally:
-            active_yt_downloads.pop(user_id, None)
-            active_yt_downloads.pop(f"url_{user_id}", None)
-
-    # ==================== CALLBACKS FOR QUALITY SELECTION ====================
-    @bot.on_callback_query(filters.regex(r"^yt_(best|720|480|audio)_(.{11})$"))
-    async def yt_quality_callback(client, callback_query):
-        user_id = callback_query.from_user.id
-        data = callback_query.data
-        
-        if user_id not in ADMINS and await db.is_banned(user_id):
-            await callback_query.answer("You are banned!", show_alert=True)
-            return
-
-        # Extract quality and video id
-        parts = data.split("_")
-        quality = parts[1]
-        video_id = parts[2]
-        
-        url = active_yt_downloads.get(f"url_{user_id}")
-        if not url:
-            await callback_query.answer("Session expired! Send link again.", show_alert=True)
-            return
-
-        await callback_query.message.delete()
-
-        format_type = "audio" if quality == "audio" else "video"
-        quality_map = {"best": "best", "720": "720", "480": "480"}
-        selected_quality = quality_map.get(quality, "best")
-
-        # Get title again
-        info = await asyncio.to_thread(get_video_info, url)
-        title = info.get('title', 'YouTube Video')
-
-        await start_download(callback_query.message, url, format_type, selected_quality, user_id, title)
-
-    # ==================== CANCEL YT DOWNLOAD ====================
-    @bot.on_message(filters.command("cancel_yt"))
-    async def cancel_yt_command(client, message):
-        user_id = message.from_user.id
-        active_yt_downloads[user_id] = False
-        await message.reply_text(f"{NEKO_SLEEP}\n\n**Cancelling...** 💤")
-
-    # ==================== AUTO DETECT YOUTUBE LINKS ====================
-    @bot.on_message(
-        filters.regex(r'(https?://)?(www\.)?(youtube|youtu)\.(com|be)/.+')
-        & ~filters.command(["yt", "start", "help", "settings", "cancel"])
-    )
-    async def auto_detect_youtube(client, message):
-        if not message.text:
-            return
-        
-        urls = YT_REGEX.findall(message.text)
-        if urls:
-            # urls is list of tuples, get the full match
-            full_urls = re.findall(r'(https?://)?(www\.)?(youtube|youtu)\.(com|be)/[^\s]+', message.text)
-            if full_urls:
-                url = ''.join(full_urls[0])
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("📹 Video", callback_data=f"ytauto_video_{extract_yt_id(url)}"),
-                        InlineKeyboardButton("🎵 Audio", callback_data=f"ytauto_audio_{extract_yt_id(url)}")
-                    ],
-                    [InlineKeyboardButton("❌ Ignore", callback_data="cancel")]
-                ])
-                await message.reply_text(
-                    f"{NEKO_FOUND}\n\n**YouTube link detected!** 🎬\n\n"
-                    f"Choose format:",
-                    reply_markup=keyboard
-                )
-                active_yt_downloads[f"url_{message.from_user.id}"] = url
-
-    @bot.on_callback_query(filters.regex(r"^ytauto_(video|audio)_(.{11})$"))
-    async def yt_auto_callback(client, callback_query):
-        user_id = callback_query.from_user.id
-        data = callback_query.data
-        
-        parts = data.split("_")
-        format_type = parts[1]
-        video_id = parts[2]
-        
-        url = active_yt_downloads.get(f"url_{user_id}")
-        if not url:
-            await callback_query.answer("Expired!", show_alert=True)
-            return
-
-        await callback_query.message.delete()
-        
-        info = await asyncio.to_thread(get_video_info, url)
-        title = info.get('title', 'YouTube Video')
-        
-        await start_download(callback_query.message, url, format_type, "best", user_id, title)
-        
+            active_yt.pop(uid, None)
